@@ -1,5 +1,9 @@
 #include <stdio.h>
+#include <stdlib.h>
+
 #include "../minunit.h"
+#include "memchunk.h"
+#include "test.h"
 
 int tests_run = 0;
 
@@ -22,7 +26,7 @@ int main(int argc, char **argv)
  */
 static char * all_tests()
 {
-    mu_run_test(test_foo);
+    mu_run_test(test_main);
     return 0;
 }
 
@@ -30,8 +34,13 @@ static char * all_tests()
  * Write tests below.
  */
 
-static char * test_foo()
+static char * test_main()
 {
+    int size = 3;
+    struct memchunk* chunk_list;
+    chunk_list = malloc(sizeof(memchunk) * size);
+
+    int count = get_mem_layout(chunk_list, size);
     mu_assert("err msg", foo == 3);
     return 0;
 }
