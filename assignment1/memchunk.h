@@ -10,7 +10,9 @@ struct memchunk {
 };
 
 int get_mem_layout(struct memchunk * chunk_list, int size);
-int get_page_permission(uintptr_t current_addr, int page_size);
+int get_rw(char* current_addr);
+int can_read(char* current_addr);
+int can_write(char* current_addr);
 void sigsegv_handler(int sig);
 
 #endif

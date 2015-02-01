@@ -1,46 +1,27 @@
 #include <stdio.h>
 #include <stdlib.h>
-
-#include "../minunit.h"
 #include "memchunk.h"
-#include "test.h"
-
-int tests_run = 0;
 
 int main(int argc, char **argv)
 {
-    char *result = all_tests();
-    if (result != 0) {
-        printf("%s\n", result);
-    }
-    else {
-        printf("ALL TESTS PASSED\n");
-    }
-    printf("Tests run: %d\n", tests_run);
+    printf("Scanning...\n");
+    int size = 16;
 
-    return result != 0;
-}
-
-/**
- * Declare all tests to run here.
- */
-static char * all_tests()
-{
-    mu_run_test(test_main);
-    return 0;
-}
-
-/**
- * Write tests below.
- */
-
-static char * test_main()
-{
-    int size = 3;
+    // ALlocate a memchunk array
     struct memchunk* chunk_list;
-    chunk_list = malloc(sizeof(memchunk) * size);
+    chunk_list = malloc(sizeof(struct memchunk) * size);
 
     int count = get_mem_layout(chunk_list, size);
-    mu_assert("err msg", foo == 3);
+    printf("\nUnique Chunks: %d\n", count);
+
+    for (int i = 0; i < size; i++) {
+        struct memchunk chunk = chunk_list[i];
+        printf(
+            "Start: %p, Size: %lu, RW: %d\n", chunk.start, chunk.length, chunk.RW
+        );
+    }
+
+    free(chunk_list);
+
     return 0;
 }

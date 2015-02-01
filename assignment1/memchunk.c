@@ -1,4 +1,4 @@
-// Profile the programs main memory
+// Profiles the processes main memory
 
 #include <stdlib.h>
 #include <limits.h>
@@ -7,11 +7,11 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <strings.h>
+#include <signal.h>
 
 #include "memchunk.h"
 
-// Sets our current memchunk for signhandler use
-struct memchunk current_chunk;
+/* Sets our current memchunk for signhandler use */
 static jmp_buf env;
 
 /**
@@ -23,89 +23,122 @@ static jmp_buf env;
  */
 int get_mem_layout(struct memchunk * chunk_list, int size)
 {
-    /* // set base counters and such */
-    int page_size = getpagesize();
-    printf("Page length: %d\n", page_size);
-    unsigned long max_memory_addr = ULONG_MAX / page_size;
-    int total_chunks = 0;
-    /* int list_size = 0; */
+	/* set base counters and such */
+	int page_size = sysconf(_SC_PAGESIZE);
+	int list_size = 0;
 
-    /* // use an outrageous number so we immediately start a new chunk */
-    uintptr_t current_addr = 0;
-    int current_permission;
-    int last_permission;
-    /* struct memchunk chunk = {0}; */
+	/* includes the initial chunk */
+	int total_chunks = 1;
 
-    /* // set our initial permission so we don't double count the first chunk */
-    last_permission = get_page_permission(current_addr, page_size);
-    current_addr += page_size;
+	/* Tracks Permissions */
+	int last_permission;
+	int current_permission;
 
-    /* // iterate through all memchunks */
-    for (
-        current_addr = 0; current_addr < max_memory_addr; current_addr += page_size
-    ) {
+	/* For checking addresses */
+	char* current_addr = (char*) 0;
+	char* last_addr = (char*) 0;
+	char* chunk_start_addr = 0;
 
-        printf("\nAddress: %lu", current_addr);
-        current_permission = get_page_permission(current_addr, page_size);
-        printf(" Permission: %d", current_permission);
+	last_permission = get_rw(current_addr);
 
-        /* // If our latest chunk has a different access mode, increment and */
-        /* // update */
-        /* if (current_permission != last_permission) { */
-            /* total_chunks++; */
-            /* last_permission = current_permission; */
+	/* iterate until we wrap around back to 0 */
+	while (current_addr >= last_addr) {
 
-            /* if (list_size < size) { */
-                /* chunk_list[list_size] = chunk; */
-                /* memset(&chunk, 0, sizeof(chunk)); */
-                /* chunk.start = (void*) current_addr; */
-                /* chunk.RW = current_permission; */
-            /* } */
-        /* } */
+		current_permission = get_rw(current_addr);
 
-        /* // Otherwise, update our memchunk */
-        /* else { */
-            /* chunk.length += page_size; */
-        /* } */
-    }
+		/* If our latest chunk has a different access mode, increment and
+		* update */
+		if (current_permission != last_permission) {
 
-    return total_chunks;
+			/* populate our chunk_list if there is still room */
+			if (list_size < size) {
+				chunk_list[list_size].start = chunk_start_addr;
+				chunk_list[list_size].length = current_addr - chunk_start_addr;
+				chunk_list[list_size].RW = last_permission;
+				list_size++;
+			}
+
+			/* increment chunk count and set new permission */
+			total_chunks++;
+			last_permission = current_permission;
+			chunk_start_addr = current_addr;
+		}
+
+		/* increment trackers */
+		last_addr = current_addr;
+		current_addr += page_size;
+	}
+
+	/* adds the last chunk to the list if still room */
+	if (list_size < size) {
+		chunk_list[list_size].start = chunk_start_addr;
+		chunk_list[list_size].length = current_addr - chunk_start_addr;
+		chunk_list[list_size].RW = last_permission;
+		list_size++;
+	}
+
+	return total_chunks;
 }
 
 /**
  * Tests a page in memory to see what it's user level permissions are.
  */
-int get_page_permission(uintptr_t current_addr, int page_size)
+int get_rw(char* current_addr)
 {
-    char * block = (char*) current_addr;
+	if (can_read(current_addr)) {
 
-    // set our signal handler
-    (void) signal(SIGSEGV, sigsegv_handler);
+		if (can_write(current_addr)) {
+			/* "1" means read & write perms */
+			return 1;
+		}
 
-    // Check read permissions
-    if (!setjmp(env)) {
+		/* "0" means read only */
+		return 0;
+	}
 
-        // see if we seg fault on read attempt
-        char temp = *block;
+	/* Defaults to no permissions via "-1" */
+	return -1;
+}
 
-        // make sure we write back the old value if successful so we don't
-        // overwrite this programs own memory
-        if (!setjmp(env)) {
+/**
+ * Checks whether or not a memory block is readable. Returns true(1) if so.
+ */
+int can_read(char *ptr)
+{
+	char temp;
 
-            *block = 'a';
-            *block = temp;
-            return 1;
+	/* set our signal handler */
+	(void) signal(SIGSEGV, sigsegv_handler);
 
-        } else {
-            return 0;
-        }
+	if (setjmp(env)) {
+		return 0;
+	}
 
-    } else {
-        return -1;
-    }
+	temp = *ptr;
+	return 1;
+}
 
-    // should never make it here, but this squashes warnings
-    return 0;
+/**
+ * Checks whether or not a memory block is writable. Returns true(1) if so.
+ * Assumes that the memory block is readable to succeed.
+ */
+int can_write(char *ptr)
+{
+	char temp;
+
+	/* set our signal handler */
+	(void) signal(SIGSEGV, sigsegv_handler);
+
+	if (setjmp(env)) {
+		return 0;
+	}
+
+	/* Read, then write. Don't change ptr value otherwise bad things might */
+	/* happen here */
+	temp = *ptr;
+	*ptr = temp;
+
+	return 1;
 }
 
 /**
@@ -114,21 +147,5 @@ int get_page_permission(uintptr_t current_addr, int page_size)
  */
 void sigsegv_handler(int sig)
 {
-    printf("... Seg Fault!");
-    longjmp(env, 1);
-}
-
-int main(int argc, char **argv)
-{
-    printf("Scanning...\n");
-    int size = 3;
-
-    // ALlocate a memchunk array
-    struct memchunk* chunk_list;
-    chunk_list = malloc(sizeof(struct memchunk*) * size);
-
-    int count = get_mem_layout(chunk_list, size);
-    printf("Unique Chunks: %d\n", count);
-
-    return 0;
+	longjmp(env, 1);
 }
