@@ -1,3 +1,6 @@
+/**
+ * A UDP based random "Packet" streamer.
+ */
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,9 +13,8 @@
 
 #define MAXBUF		    1024
 #define MAX_TTL		    4
-#define MAX_PACKET_ID	    65535
-#define MAX_PAYLOAD_INDEX   3
-#define MAX_ROUTE_INDEX     3
+#define MAX_PAYLOAD_INDEX   4
+#define MAX_ROUTE_INDEX     4
 
 /* Packet Generator Functions */
 int rand_limit_floor(int floor, int limit);
@@ -27,14 +29,16 @@ char** ROUTERS = (char* []) {
     "192.168.192.0",
     "192.168.128.0",
     "192.224.0.0",
-    "168.130.192.01"
+    "168.130.192.01",
+    "192.224.12.2"
 };
 
 char** PAYLOADS = (char* []) {
     "\"Hello!\"",
     "What's your name?",
     "Testing Test file.",
-    "I am a longer test string being sent in a packet as the payload, seeeeeeeeeee!"
+    "I am a longer test string being sent in a packet as the payload, seeeeeeeeeee!",
+    ""
 };
 
 typedef struct {

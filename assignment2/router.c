@@ -158,14 +158,12 @@ void route_packet(FILE* stats_file, RouterTable* table, char* stream)
 	if (build_packet(packet, stream) != 0)
 	{
 		stats.expired = stats.expired + 1;
-		puts("expired");
 		free(packet);
 		return;
 	}
 
 	if (find_destination_router(router, table, packet) == -1)
 	{
-		puts("unroutable");
 		stats.unroutable = stats.unroutable + 1;
 	}
 	else
@@ -185,12 +183,10 @@ void route_packet(FILE* stats_file, RouterTable* table, char* stream)
 			next_hop = router->next_hop;
 			if (strcmp(next_hop, "RouterB") == 0)
 			{
-				puts("router B");
 				stats.router_b = stats.router_b + 1;
 			}
 			else if (strcmp(next_hop, "RouterC") == 0)
 			{
-				puts("router C");
 				stats.router_c = stats.router_c + 1;
 			}
 		}
@@ -322,23 +318,26 @@ int build_packet(Packet* packet, char* raw_packet)
 	}
 
 	// If we didn't parse the five expected packet segments
-	if (counter != 5)
+	if (counter < 4)
 	{
-		fprintf(stderr, "Error parsing %s into packet, skipping.\n", raw_packet);
-		free(payload);
+		fprintf(stderr, "Malformed packet provided for %s", raw_packet);
 		return -1;
 	}
 
+	int result = 0;
 	*packet = Packet_new(id, src, dest, TTL, payload);
 	if (packet->TTL <= 0)
 	{
-		free(payload);
-		return -1;
+		result = -1;
 	}
 
-	free(payload);
+	if (counter == 5)
+	{
+		free(payload);
+	}
 
-	return 0;
+	return result;
+
 }
 
 /**
@@ -466,25 +465,15 @@ int compare_subnet(int prefix_length, char* candidate, char* destination)
 	uint32_t destination_ip = parse_ipv4_string(destination);
 
 	// gets the candidates subnet using the candidate with the mask
-	puts(destination);
-	puts(candidate);
 	uint32_t candidate_ip = parse_ipv4_string(candidate);
 	uint32_t subnet = candidate_ip & net_mask;
-	puts("candidate\n");
-	printf("%u\n", candidate_ip);
 
 	uint32_t masked_destination = destination_ip & net_mask;
-	puts("masked dest\n");
-	printf("%u\n", masked_destination);
-	puts("subnet\n");
-	printf("%u\n", subnet);
 	if (masked_destination == subnet)
 	{
-		puts("woo");
 		return 0;
 	}
 	
-	puts("fuck");
 	return -1;
 }
 
