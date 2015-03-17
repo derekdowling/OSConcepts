@@ -56,7 +56,7 @@ int build_packet(Packet* packet, char* raw_packet);
 Packet Packet_new(int id, char* src, char* dest, int TTL, char* payload);
 void route_packet(FILE* stats_file, RouterTable* table, char* stream);
 int find_destination_router(Router* router, RouterTable* table, Packet* packet);
-void output_statistics(FILE* stats_file);
+void output_statistics();
 int build_socket(int port);
 int set_server_address(RouterTable* table);
 void signal_handler(int signal);
@@ -66,11 +66,11 @@ uint32_t parse_ipv4_string(char* ipAddress);
 /* Global Stats Struct */
 Stats stats;
 int keep_running = 1;
+FILE* stats_file;
 
 int main(int argc, char *argv[])
 {
 	char raw_packet[MAX_BUFFER];
-	FILE* stats_file;
 	struct sockaddr_in inc_socket;
 	int socketfd, counter, port, sock_length = sizeof(inc_socket);
 
@@ -117,18 +117,15 @@ int main(int argc, char *argv[])
 				&sock_length
 			) != -1
 		) {
-			printf("Packet: %s\n", raw_packet);
-
-		// route and increment counter
+			// route and increment counter
 			route_packet(stats_file, table, raw_packet);
 			counter++;
-			printf("%d\n", counter);
 		
 			// see if it's time to output statistcs
 			if (counter == 20)
 			{
 				counter = 0;
-				output_statistics(stats_file);
+				output_statistics();
 			}
 		}
 		else
@@ -152,7 +149,7 @@ int main(int argc, char *argv[])
 void route_packet(FILE* stats_file, RouterTable* table, char* stream)
 {
 	Packet* packet = malloc(sizeof(Packet));
-	Router* router;
+	Router* router = malloc(sizeof(Router));
 	char* next_hop;
 
 	if (build_packet(packet, stream) != 0)
@@ -193,6 +190,7 @@ void route_packet(FILE* stats_file, RouterTable* table, char* stream)
 
 		// finally free the created packet
 		free(packet);
+		free(router);
 	}
 }
 
@@ -395,16 +393,16 @@ void add_new_router(RouterTable* table, char* address, int prefix_length, char* 
  * Updates the statistics file based upon the state of the global statistics
  * struct.
  */
-void output_statistics(FILE* stats_file)
+void output_statistics()
 {
 	// rewind pointer to the start of the file
-	rewind(stats_file);
 	fprintf(
 		stats_file,
 		"expired packets: %d\nunroutable packets: %d\ndelivered direct: %d\nrouter B: %d\nrouter C: %d\n",
 		stats.expired, stats.unroutable, stats.direct, stats.router_b, stats.router_c
 	);
 
+	rewind(stats_file);
 	printf("Router stats updated.\n");
 }
 
@@ -443,6 +441,7 @@ int build_socket(int port)
 
 void signal_handler(int signal)
 {
+	output_statistics();
     printf("Terminating...");
     keep_running = 0;
 }

@@ -14,23 +14,22 @@
 #define MAXBUF		    1024
 #define MAX_TTL		    4
 #define MAX_PAYLOAD_INDEX   4
-#define MAX_ROUTE_INDEX     4
+#define MAX_ROUTE_INDEX     3
 
 /* Packet Generator Functions */
 int rand_limit_floor(int floor, int limit);
 int rand_limit(int limit);
 void generate_packet(char* raw_packet);
 void signal_handler(int signal);
-void update_statistics(FILE* stats_file);
+void update_statistics();
 void increment_stats(int src, int dest);
 int build_socket(int port);
 
 char** ROUTERS = (char* []) {
-    "192.168.192.0",
     "192.168.128.0",
+    "192.168.192.0",
     "192.224.0.0",
-    "168.130.192.01",
-    "192.224.12.2"
+    "168.130.192.01"
 };
 
 char** PAYLOADS = (char* []) {
@@ -53,6 +52,8 @@ typedef struct {
 
 Stats STATS = {0, 0, 0, 0, 0, 0, 0};
 static int packet_id_counter = 0;
+static int keep_going = 1;
+FILE* stats_file;
 
 int main (int argc, char *argv[])
 {
@@ -60,7 +61,6 @@ int main (int argc, char *argv[])
     struct sockaddr_in dest;
     char buffer[MAXBUF];
     char* packet_file_path;
-    FILE* stats_file;
 
     if (argc != 3)
     {
@@ -94,12 +94,11 @@ int main (int argc, char *argv[])
     signal(SIGINT, signal_handler);
 
     counter = 0;
-    while(1)
+    while(keep_going)
     {
 	bzero(buffer, MAXBUF);
 	generate_packet(buffer);
 
-	puts("here we are");
 	if (sendto(
 	    socketfd,
 	    buffer,
@@ -108,13 +107,11 @@ int main (int argc, char *argv[])
 	    (struct sockaddr*) &dest,
 	    sizeof(dest)) != -1
 	) {
-	    puts(buffer);
-
 	    counter++;
 	    if (counter == 20)
 	    {
-		printf("New stats!");
-		update_statistics(stats_file);
+		update_statistics();
+		counter = 0;
 	    }
 
 	    // sleep for two seconds as per spec as not to flood the router
@@ -132,11 +129,9 @@ int main (int argc, char *argv[])
 /**
  * Outputs updated statistics to file.
  */
-void update_statistics(FILE* stats_file)
+void update_statistics()
 {
-    rewind(stats_file);
-
-    // Ugly over length violation, but no nicer way to do this
+    // Ugly over width violation, but no nicer way to do this
     fprintf(stats_file,
         "NetA to NetB: %d\nNetA to NetC: %d\nNetB to NetA: %d\nNetB to NetC: %d\nNetC to NetA: %d\nNetC to NetB: %d\nInvalid Destination: %d\n",
         STATS.a_to_b,
@@ -147,6 +142,8 @@ void update_statistics(FILE* stats_file)
         STATS.c_to_b,
         STATS.invalid
     );
+    rewind(stats_file);
+    printf("Updating generation statistics.\n");
 }
 
 /**
@@ -159,7 +156,7 @@ void generate_packet(char* raw_packet)
     ttl = rand_limit_floor(1, MAX_TTL);
     src = rand_limit(MAX_ROUTE_INDEX);
     dest = rand_limit(MAX_ROUTE_INDEX);
-    payload = rand_limit(MAX_PAYLOAD_INDEX);
+    payload = rand_limit(MAX_ROUTE_INDEX);
 
     // ensure src != dest for addresses and we arent sending from an invalid
     // src address
@@ -192,7 +189,7 @@ void generate_packet(char* raw_packet)
 void increment_stats(int src, int dest)
 {
     // handle invalid case first
-    if (dest == MAX_PAYLOAD_INDEX) {
+    if (dest == MAX_ROUTE_INDEX) {
         STATS.invalid = STATS.invalid + 1;
     }
     // we should never have src == dest based on how packets are generated
@@ -257,8 +254,9 @@ int rand_limit(int limit)
 
 void signal_handler(int signal)
 {
+    update_statistics();
     printf("Terminating...");
-    exit(-1);
+    keep_going = 0;
 }
 
 /**
