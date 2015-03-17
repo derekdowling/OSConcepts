@@ -1,9 +1,17 @@
 all:
-	gcc -std=c99 -m32 router.c pktgen.c -0 simulator
-test:
-	gcc -std=c99 -m32 test.c router.c -o tester
-	./tester
+	make router
+	make pktgen
+router:
+	gcc -std=c99 -m32 router.c -o router
+test_router:
+	make router
+	./router 8585 RT_A.txt router_stats.txt
+pktgen:
+	gcc -std=c99 -m32 pktgen.c -o pktgen
+test_pktgen:
+	make pktgen
+	./pktgen 8585 pktgen_stats.txt
 clean:
-	rm tester
+	rm pktgen router pktgen_stats.txt router_stats.txt
 package:
-	tar -cvf dowling-asgn1.tar router.c router.h pktgen.c Makefile
+	tar -cvf dowling-asgn2a.tar router.c pktgen.c Makefile
