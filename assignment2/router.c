@@ -65,7 +65,7 @@ uint32_t parse_ipv4_string(char* ipAddress);
 
 /* Global Stats Struct */
 Stats stats;
-int keep_running = 1;
+static int keep_running = 1;
 FILE* stats_file;
 
 int main(int argc, char *argv[])
@@ -443,7 +443,7 @@ void signal_handler(int signal)
 {
 	output_statistics();
     printf("Terminating...");
-    keep_running = 0;
+	exit(0);
 }
 
 /**
