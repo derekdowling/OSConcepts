@@ -105,7 +105,7 @@ int main(int argc, char *argv[])
 	counter = 0;
 	while (keep_running)
 	{
-	    bzero(raw_packet, MAX_BUFFER);
+		bzero(raw_packet, MAX_BUFFER);
 
 		// Waits until we receive something
 		if (recvfrom(
