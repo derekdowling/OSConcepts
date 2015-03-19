@@ -1,491 +1,364 @@
-/**
- * A very simple file server.
+/*
+ * Copyright (c) 2008-2015 Bob Beck <beck@obtuse.com>, Derek Dowling
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <strings.h>
+
+#include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/un.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
+#include <sys/stat.h>
+#include <netdb.h>
 #include <arpa/inet.h>
+
 #include <time.h>
+#include <err.h>
 #include <errno.h>
-#include <unistd.h>
-#include <signal.h>
 #include <limits.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define CHUNK_SIZE 1024
 #define IP "192.168.10.1"
 
-/* Struct Definitions */
-typedef struct {
-    char* address;
-    int prefix_length;
-    char* next_hop;
-} Router;
+void daemonize(FILE* log_file, char* log_file_path);
+void log_response(
+	FILE* log_file,
+	char* ip,
+	unsigned short port,
+	char* file_name,
+	time_t start,
+	char* result
+);
+static void kidhandler(int signum);
 
-typedef struct {
-    Router** routes;
-    int size;
-    int max_size;
-} RouterTable;
-
-typedef struct {
-    int id;
-    char* src;
-    char* dest;
-    int TTL;
-    char* payload;
-} Packet;
-
-typedef struct {
-    int expired;
-    int unroutable;
-    int direct;
-    int router_b;
-    int router_c;
-} Stats;
-
-
-/* Function Definitions */
-RouterTable* RouterTable_new();
-RouterTable* build_router_table(char* table_path);
-void add_new_router(RouterTable* table, char address[16], int prefix_length, char next_hop[8]);
-int build_packet(Packet* packet, char* raw_packet);
-Packet Packet_new(int id, char* src, char* dest, int TTL, char* payload);
-void route_packet(FILE* stats_file, RouterTable* table, char* stream);
-int find_destination_router(Router* router, RouterTable* table, Packet* packet);
-void output_statistics();
-int build_socket(int port);
-int set_server_address(RouterTable* table);
-void signal_handler(int signal);
-int compare_subnet(int prefix_length, char* candidate, char* destination);
-uint32_t parse_ipv4_string(char* ipAddress);
-
-/* Global Stats Struct */
-Stats stats;
-static int keep_running = 1;
-FILE* stats_file;
-
-int main(int argc, char *argv[])
+/**
+ *
+ */
+int main(int argc,	char *argv[])
 {
-	char raw_packet[MAX_BUFFER];
-	struct sockaddr_in inc_socket;
-	int socketfd, counter, port, sock_length = sizeof(inc_socket);
+	struct sockaddr_in sockname, client;
+	char buffer[CHUNK_SIZE], *ep;
+	struct sigaction sa;
+	socklen_t clientlen;
+	int sd;
+	u_short port;
+	pid_t pid;
+	u_long p;
+	FILE* log_file;
 
-	if (argc != 4)
+	/* Check arg length */
+	if (argc != 3)
 	{
-		printf("Bad Args, should be <listening-port> <base-directory-path> <logfile-path>");
+		fprintf(stderr, "usage: ./file_server <port> <file-dir> <log_path>\n");
 		exit(-1);
 	}
 
-	port = atoi(argv[1]);
-	char* table_file_path = argv[2];
-	char* stats_file_path = argv[3];
-
-	// parse out routes into Route array pointer from RT_A.txt
-	RouterTable* table = build_router_table(table_file_path);
-
-	// initialize the statistics struct
-	stats = (Stats) {0, 0, 0, 0, 0};
-
-	stats_file = fopen(stats_file_path, "w");
-	if (stats_file == NULL)
+	errno = 0;
+	port = strtoul(argv[1], &ep, 10);
+	if (*argv[1] == '\0' || *ep != '\0')
 	{
-		fprintf(stderr, "Error opening stats file.\n");
+		fprintf(stderr, "%s - not a number\n", argv[1]);
+	}
+	if ((errno == ERANGE) || (port > USHRT_MAX))
+	{
+		/* It's a number, but it either can't fit in an unsigned
+		 * long, or is too big for an unsigned short
+		 */
+		fprintf(stderr, "%s - value out of range\n", argv[1]);
 		exit(-1);
 	}
 
-	socketfd = build_socket(port);
+	/* assuming we've passed all checks, assign port */
+	port = p;
 
-    signal(SIGINT, signal_handler);
+	/* start daemon and pass in log file path to use */
+	daemonize(log_file, argv[3]);
 
-	// listen infinitely for incoming packets
-	counter = 0;
-	while (keep_running)
+	/* now check the provided directory to serve */
+	if(chdir(argv[2]) != 0)
 	{
-		bzero(raw_packet, MAX_BUFFER);
+		fprintf(log_file, "Unable to find specified file directory");
+		exit(errno);
+	}
 
-		// Waits until we receive something
-		if (recvfrom(
-				socketfd,
-				raw_packet,
-				MAX_BUFFER,
-				0,
-				(struct sockaddr*) &inc_socket,
-				&sock_length
-			) != -1
-		) {
-			// route and increment counter
-			route_packet(stats_file, table, raw_packet);
-			counter++;
-		
-			// see if it's time to output statistcs
-			if (counter == 20)
+	/* prepare our socket info */
+	memset(&sockname, 0, sizeof(sockname));
+	sockname.sin_family = AF_INET;
+	sockname.sin_port = htons(port);
+	sockname.sin_addr.s_addr = htonl(INADDR_ANY);
+	sd = socket(AF_INET,SOCK_STREAM,0);
+
+	if (sd == -1)
+	{
+		fprintf(log_file, "Failed setting up socket.");
+		exit(errno);
+	}
+
+	if (bind(sd, (struct sockaddr *) &sockname, sizeof(sockname)) == -1)
+	{
+		fprintf(log_file, "Failed binding socket to port: %u.", port);
+		exit(errno);
+	}
+
+	if (listen(sd,3) == -1)
+	{
+		fprintf(log_file, "Failed to listen via socket.");
+		exit(errno);
+	}
+
+	/*
+	 * we're now bound, and listening for connections on "sd" -
+	 * each call to "accept" will return us a descriptor talking to
+	 * a connected client
+	 *
+	 * first, let's make sure we can have children without leaving
+	 * zombies around when they die - we can do this by catching
+	 * SIGCHLD.
+	 */
+	sa.sa_handler = kidhandler;
+	sigemptyset(&sa.sa_mask);
+
+	/*
+	 * we want to allow system calls like accept to be restarted if they
+	 * get interrupted by a SIGCHLD
+	 */
+	sa.sa_flags = SA_RESTART;
+	if (sigaction(SIGCHLD, &sa, NULL) == -1)
+	{
+		fprintf(log_file, "sigaction failed");
+		exit(errno);
+	}
+
+	/*
+	 * finally - the main loop. accept connections and deal with 'em
+	 */
+	fprintf(log_file, "Server up and listening for connections on port %u\n", port);
+	while(1)
+	{
+		int clientsd;
+		clientlen = sizeof(&client);
+
+		clientsd = accept(sd, (struct sockaddr *)&client, &clientlen);
+		if (clientsd == -1)
+		{
+			fprintf(log_file, "Connection accept failed");
+			exit(-1);
+		}
+
+		/*
+		 * We fork child to deal with each connection, this way more
+		 * than one client can connect to us and get served at any one
+		 * time. There is a series of increasingly nesting if/else statements
+		 * here to make teardown easier to deal with in the event something
+		 * goes wrong.
+		 */
+
+		pid = fork();
+		if(pid == 0)
+		{
+			/* log our start time */
+			time_t start_time = time(NULL);
+
+			ssize_t written, w;
+			FILE* file;
+			int retries;
+			int result = 0;
+			char file_name[CHUNK_SIZE], result_msg[32];
+
+			struct sockaddr_in *sin = (struct sockaddr_in *) &client;
+			char* ip = inet_ntoa(sin->sin_addr);
+			unsigned short port = sin->sin_port;
+
+			/* parse incoming request */
+			if (recv(clientsd, file_name, CHUNK_SIZE, 0) > 0)
 			{
-				counter = 0;
-				output_statistics();
+
+				file = fopen(file_name, "r");
+				if (file != NULL)
+				{
+					/*
+					 * stream the file to the client, being sure to
+					 * handle a short write, or being interrupted by
+					 * a signal before we could write anything.
+					 */
+					result = 1;
+					written = 0;
+					retries = 0;
+					while (!feof(file))
+					{
+						int count = fread(buffer, 1, CHUNK_SIZE - 1, file);
+
+						/* null terminate stream at wherever the reading finished */
+						buffer[count] = 0;
+
+						/* try streaming to socket */
+						w = write(clientsd, buffer, count);
+						
+						if (w > 0)
+						{
+							written += count;
+							retries = 0;
+						}
+						else if(w == -1 && retries < 2)
+						{
+							/* if something went wrong rewind file to start of last */
+							/* chunk and try again */
+							fseek(file, count * -1, SEEK_CUR);
+							retries++;
+						}
+						else
+						{
+							result = -1;
+							break;
+						}
+					}
+
+					/*
+					 * If we finished successfully, and we've sent more than a
+					 * single chunk, terminate with "$" chunk.
+					 */
+					if (result == 1)
+					{
+						if (written > CHUNK_SIZE - 1)
+						{
+							write(clientsd, "$\0", 2);
+						}
+
+						time_t finish = time(NULL);
+						sprintf(result_msg, "%s", asctime(localtime(&finish)));
+				
+					} else {
+						sprintf(result_msg, "transmission not completed");
+					}
+		
+
+				}
+				else
+				{
+					sprintf(result_msg, "file not found");
+				}
+
+				log_response(
+					log_file,
+					ip,
+					port,
+					file_name,
+					start_time,
+					result_msg
+				);
 			}
+			else
+			{
+				fprintf(log_file, "Error receiving incoming socket message.");
+			}
+
+			/* done serving request, terminate fork */
+			exit(0);
 		}
 		else
 		{
-			fprintf(stderr, "Recvfrom err#: %d\n", errno);
+			fprintf(log_file, "fork failed");
 		}
+
+		/* finally, close connection */
+		close(clientsd);
 	}
-
-	// now tear everything back down
-	close(socketfd);
-	fclose(stats_file);
-
-	for(int i = 0; i < table->size; i++)
-	{
-		free(table->routes[i]);
-	}
-
-	free(table);
 }
 
-void route_packet(FILE* stats_file, RouterTable* table, char* stream)
+/**
+ * Daemonizes the current program such that it does not termine if the attached
+ * TTY exits or the initial program process is stopped.
+ *
+ * Logic adapted from:
+ * http://stackoverflow.com/questions/17954432/creating-a-daemon-in-linux
+ *
+ * Sets the file pointer here after we successfully daemonize so that we can
+ * log in other places easier.
+ *
+ */
+void daemonize(FILE* log_file, char* log_file_path)
 {
-	Packet* packet = malloc(sizeof(Packet));
-	Router* router = malloc(sizeof(Router));
-	char* next_hop;
+	pid_t pid;
 
-	if (build_packet(packet, stream) != 0)
+	/* Fork off the parent process and terminate if an error occurred. */
+	pid = fork();
+	if (pid < 0)
 	{
-		stats.expired = stats.expired + 1;
-		free(packet);
-		return;
+		fprintf(stderr, "Failed to fork off parent while daemonizing.\n");
+		exit(errno);
 	}
-
-	if (find_destination_router(router, table, packet) == -1)
+	else if (pid > 0)
 	{
-		stats.unroutable = stats.unroutable + 1;
+		/* Success: Terminate Parent Process */
+		exit(errno);
 	}
 	else
 	{
-		if (strcmp(router->next_hop, "0") == 0)
-		{
-			stats.direct = stats.direct + 1;
-			printf(
-				"Delivering direct: packet ID=%d, dest=%s\n",
-				packet->id,
-				router->address
-			);
-		}
-		else
-		{
-			// increment counters and free packet allocations
-			next_hop = router->next_hop;
-			if (strcmp(next_hop, "RouterB") == 0)
-			{
-				stats.router_b = stats.router_b + 1;
-			}
-			else if (strcmp(next_hop, "RouterC") == 0)
-			{
-				stats.router_c = stats.router_c + 1;
-			}
-		}
-
-		// finally free the created packet
-		free(packet);
-		free(router);
-	}
-}
-
-/**
- * Attempts to find the destination router for the given packet from the provided
- * table.
- * Returns a Router pointe or NULL if no matches were found.
- */
-int find_destination_router(Router* router, RouterTable* table, Packet* packet)
-{
-	int prefix_length;
-
-	for(int i = 0; i < table->size; i++)
-	{
-		Router* candidate = table->routes[i];
-
-		// see if router and destination are in the same subnet
-		if ((compare_subnet(
-			candidate->prefix_length,
-			candidate->address,
-			packet->dest) == 0
-			)  &&
-			strcmp(candidate->address, packet->dest) == 0
-		) {
-			*router = *candidate;
-			return 0;
-		}
-	}
-
-	return -1;
-}
-
-/**
- * Parses out a route table struct from the provided table file path.
- */
-RouterTable* build_router_table(char* table_path)
-{
-	char* token = NULL;
-	RouterTable* table = RouterTable_new();
-	FILE* table_file = fopen(table_path, "r");
-
-	if (table_file == NULL)
-	{
-		perror("Can't read invalid table file path\n");
+		fprintf(stderr, "Weird state when starting daemonization, exiting.");
 		exit(-1);
 	}
 
-	// parse line by line through the file
-	while (!feof(table_file))
-	{
-		char address[16];
-		int prefix_length;
-		char next_hop[8];
+	/* Set new file permissions */
+	umask(0);
 
-		if (fscanf(table_file, "%s %d %s", address, &prefix_length, next_hop) != 3)
-		{
-			continue;
-		}
-		add_new_router(table, address, prefix_length, next_hop);
+	/* FROM HERE ON OUT, LOG TO FILE, OTHERWISE WE WONT SEE IT */
+	log_file = fopen(log_file_path, "w");
+	if (log_file == NULL)
+	{
+		fprintf(stderr, "Unable to open or create specified log file");
+		exit(errno);
 	}
 
-	fclose(table_file);
-
-	return table;
+	/* On success: The child process becomes session leader */
+	if (setsid() < 0)
+	{
+		fprintf(log_file, "Error creating new session for process.");
+		exit(errno);
+	}
 }
 
 /**
- * Allocates and initializes a new RouteTable.
+ * Outputs transfer information in a specific format
  */
-RouterTable* RouterTable_new()
-{
-	RouterTable* table = malloc(sizeof(RouterTable));
-	table->size = 0;
-	table->max_size = 20;
-	table->routes = malloc(table->max_size * sizeof(Router*));
-	return table;
-}
-
-/**
- * Handles parsing, and preparing an incoming packet for:
- * <packet ID>, <source IP>, <destination IP>, <TTL>, <payload>
- *
- * If the packet can't be properly parsed or the TTL is too low, discards
- * packet and returns NULL.
- */
-int build_packet(Packet* packet, char* raw_packet)
-{
-	int id, TTL;
-	char src[16], dest[16];
-	char* payload;
-
-	// super ghetto parser, csv lists suck in c
-	char selector[] = ", ";
-	char* token = strtok(raw_packet, selector);
-	int counter = 0;
-	while (token && counter < 5)
-	{
-		// nasty switch statement is probably easier to grok than a bunch of
-		// ifs marhshalling data into vars
-		switch (counter)
-		{
-			case 0:
-				id = atoi(token);
-				break;
-			case 1:
-				strcpy(src, token);
-				break;
-			case 2:
-				strcpy(dest, token);
-				break;
-			case 3:
-				TTL = atoi(token);
-				break;
-			case 4:
-				// handle a custom payload length
-				payload = malloc(strlen(token) + 1);
-				strcpy(payload, token);
-				break;
-		}
-
-		counter++;
-		token = strtok(NULL, selector);
-	}
-
-	// If we didn't parse the five expected packet segments
-	if (counter < 4)
-	{
-		fprintf(stderr, "Malformed packet provided for %s", raw_packet);
-		return -1;
-	}
-
-	int result = 0;
-	*packet = Packet_new(id, src, dest, TTL, payload);
-	if (packet->TTL <= 0)
-	{
-		result = -1;
-	}
-
-	if (counter == 5)
-	{
-		free(payload);
-	}
-
-	return result;
-
-}
-
-/**
- * Constructor for creating a new packet. Will automatically decrement TTL.
- */
-Packet Packet_new(int id, char* src, char* dest, int TTL, char* payload)
-{
-	Packet packet;
-
-	// allocate and initialize values
-	packet.id = id;
-	packet.src = malloc(strlen(src) + 1);
-	strcpy(packet.src, src);
-	packet.dest = malloc(strlen(dest) + 1);
-	strcpy(packet.dest, dest);
-
-	// automatically decrement TTL right off the bat
-	packet.TTL = TTL - 1;
-	packet.payload = malloc(strlen(payload) + 1);
-
-	strcpy(packet.payload, payload);
-	return packet;
-}
-
-/**
- * Marshal route segments into a route struct with format:
- *
- * 0 - <network‐address>
- * 1 - <net‐prefix‐length>
- * 2 - <nexthop>
- */
-void add_new_router(RouterTable* table, char* address, int prefix_length, char* next_hop)
-{
-	// marshal data into Route
-	Router* new_route = malloc(sizeof(Router));
-	new_route->address = malloc(strlen(address) + 1);
-	strcpy(new_route->address, address);
-	new_route->prefix_length = prefix_length;
-	new_route->next_hop = malloc(strlen(next_hop) + 1);
-	strcpy(new_route->next_hop, next_hop);
-
-	// Grow our RouteTable array if at max length
-	if (table->size == table->max_size)
-	{
-		table->max_size *= 2;
-		table->routes = realloc(table->routes, table->max_size * sizeof(Router*));
-	}
-
-	// add route to the array
-	table->routes[table->size] = new_route;
-	table->size = table->size + 1;
-}
-
-/**
- * Updates the statistics file based upon the state of the global statistics
- * struct.
- */
-void output_statistics()
-{
-	// rewind pointer to the start of the file
+void log_response(
+	FILE* log_file,
+	char* ip,
+	unsigned short port,
+	char* file_name,
+	time_t start,
+	char* result
+) {
 	fprintf(
-		stats_file,
-		"expired packets: %d\nunroutable packets: %d\ndelivered direct: %d\nrouter B: %d\nrouter C: %d\n",
-		stats.expired, stats.unroutable, stats.direct, stats.router_b, stats.router_c
+		log_file,
+		"%s %d %s %s %s\n",
+		ip,
+		ntohs(port),
+		file_name,
+		asctime(localtime(&start)),
+		result
 	);
-
-	rewind(stats_file);
-	printf("Router stats updated.\n");
 }
 
 /**
- * Handles building the socket, binding, and listening it to the specified
- * port.
+ * Sighandler for making sure no child processes turn into zombies.
  */
-int build_socket(int port)
+static void kidhandler(int signum)
 {
-	struct sockaddr_in sock;
-	int socketfd;
-	
-	if ((socketfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
-	{
-		fprintf(stderr, "Unable to create a new socket.");
-		exit(errno);
-	}
-
-	// 0 out
-	memset((char *) &sock, 0, sizeof(sock));
-
-	// Specify socket parameters
-	sock.sin_family = AF_INET;
-	sock.sin_port = htons(port);
-	sock.sin_addr.s_addr = htonl(INADDR_ANY);
-
-	// bind to specified socket
-	if (bind(socketfd, (struct sockaddr*) &sock, sizeof(sock)) == -1)
-	{
-		fprintf(stderr, "Error binding socket on port %d\n", port);
-		exit(errno);
-	}
-
-	return socketfd;
-}
-
-void signal_handler(int signal)
-{
-	output_statistics();
-    printf("Terminating...");
-	exit(0);
-}
-
-/**
- * Checks if an ip address is in the same subnet as the defined prefix.
- *
- * Returns 0 if same, -1 if not.
- */
-int compare_subnet(int prefix_length, char* candidate, char* destination)
-{
-	// build our mask
-	uint32_t net_mask = UINT_MAX;
-	uint32_t shift_amnt = 32 - prefix_length;
-
-	// shift right to unset lower bits, then shift back to get correct value
-	net_mask = net_mask >> shift_amnt;
-	net_mask = net_mask << shift_amnt;
-
-	uint32_t destination_ip = parse_ipv4_string(destination);
-
-	// gets the candidates subnet using the candidate with the mask
-	uint32_t candidate_ip = parse_ipv4_string(candidate);
-	uint32_t subnet = candidate_ip & net_mask;
-
-	uint32_t masked_destination = destination_ip & net_mask;
-	if (masked_destination == subnet)
-	{
-		return 0;
-	}
-	
-	return -1;
-}
-
-/**
- * Adopted from:
- * http://stackoverflow.com/questions/10283703/conversion-of-ip-address-to-integer
- *
- * Which is a helper to convert IPv4 strings into unsigned ints for mask
- * comparison.
- */
-uint32_t parse_ipv4_string(char* ipAddress)
-{
-	uint32_t ipbytes[4];
-	sscanf(ipAddress, "%u.%u.%u.%u", &ipbytes[3], &ipbytes[2], &ipbytes[1], &ipbytes[0]);
-	return ipbytes[0] | ipbytes[1] << 8 | ipbytes[2] << 16 | ipbytes[3] << 24;
+	/* signal handler for SIGCHLD */
+	waitpid(WAIT_ANY, NULL, WNOHANG);
 }
