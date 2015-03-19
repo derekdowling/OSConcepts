@@ -62,7 +62,7 @@ int main(int argc,	char *argv[])
 	FILE* log_file;
 
 	/* Check arg length */
-	if (argc != 3)
+	if (argc != 4)
 	{
 		fprintf(stderr, "usage: ./file_server <port> <file-dir> <log_path>\n");
 		exit(-1);
@@ -86,38 +86,72 @@ int main(int argc,	char *argv[])
 	/* assuming we've passed all checks, assign port */
 	port = p;
 
-	/* start daemon and pass in log file path to use */
-	daemonize(log_file, argv[3]);
-
-	/* now check the provided directory to serve */
-	if(chdir(argv[2]) != 0)
+	/* Fork off the parent process and terminate if an error occurred. */
+	pid = fork();
+	if (pid < 0)
 	{
-		fprintf(log_file, "Unable to find specified file directory");
+		fprintf(stderr, "Failed to fork off parent while daemonizing.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	/* Success: Terminate Parent Process and continue on to post-daemoinzation */
+	if (pid > 0)
+	{
+		exit(EXIT_SUCCESS);
+	}
+
+	/* Set new file permissions */
+	umask(0);
+
+	/* FROM HERE ON OUT, LOG TO FILE, OTHERWISE WE WONT SEE IT */
+	log_file = fopen(argv[3], "w");
+	if (log_file == NULL)
+	{
+		fprintf(stderr, "Unable to open or create log file: %s.\n", argv[3]);
 		exit(errno);
 	}
+
+	/* On success: The child process becomes session leader */
+	if (setsid() < 0)
+	{
+		fprintf(log_file, "Error creating new session for process.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	/* now check the provided directory to serve */
+	if(chdir(argv[2]) < 0)
+	{
+		fprintf(log_file, "Unable to find specified file director:%s.\n", argv[2]);
+		exit(EXIT_FAILURE);
+	}
+
+	/* Close out the standard file descriptors */
+	close(STDIN_FILENO);
+	close(STDOUT_FILENO);
+	close(STDERR_FILENO);
 
 	/* prepare our socket info */
 	memset(&sockname, 0, sizeof(sockname));
 	sockname.sin_family = AF_INET;
 	sockname.sin_port = htons(port);
 	sockname.sin_addr.s_addr = htonl(INADDR_ANY);
-	sd = socket(AF_INET,SOCK_STREAM,0);
+	sd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
 	if (sd == -1)
 	{
-		fprintf(log_file, "Failed setting up socket.");
+		fprintf(log_file, "Failed setting up socket.\n");
 		exit(errno);
 	}
 
 	if (bind(sd, (struct sockaddr *) &sockname, sizeof(sockname)) == -1)
 	{
-		fprintf(log_file, "Failed binding socket to port: %u.", port);
+		fprintf(log_file, "Failed binding socket to port: %u.\n", port);
 		exit(errno);
 	}
 
-	if (listen(sd,3) == -1)
+	if (listen(sd, 3) == -1)
 	{
-		fprintf(log_file, "Failed to listen via socket.");
+		fprintf(log_file, "Failed to listen via socket.\n");
 		exit(errno);
 	}
 
@@ -245,7 +279,8 @@ int main(int argc,	char *argv[])
 					} else {
 						sprintf(result_msg, "transmission not completed");
 					}
-		
+
+					fclose(file);
 
 				}
 				else
@@ -278,58 +313,8 @@ int main(int argc,	char *argv[])
 		/* finally, close connection */
 		close(clientsd);
 	}
-}
 
-/**
- * Daemonizes the current program such that it does not termine if the attached
- * TTY exits or the initial program process is stopped.
- *
- * Logic adapted from:
- * http://stackoverflow.com/questions/17954432/creating-a-daemon-in-linux
- *
- * Sets the file pointer here after we successfully daemonize so that we can
- * log in other places easier.
- *
- */
-void daemonize(FILE* log_file, char* log_file_path)
-{
-	pid_t pid;
-
-	/* Fork off the parent process and terminate if an error occurred. */
-	pid = fork();
-	if (pid < 0)
-	{
-		fprintf(stderr, "Failed to fork off parent while daemonizing.\n");
-		exit(errno);
-	}
-	else if (pid > 0)
-	{
-		/* Success: Terminate Parent Process */
-		exit(errno);
-	}
-	else
-	{
-		fprintf(stderr, "Weird state when starting daemonization, exiting.");
-		exit(-1);
-	}
-
-	/* Set new file permissions */
-	umask(0);
-
-	/* FROM HERE ON OUT, LOG TO FILE, OTHERWISE WE WONT SEE IT */
-	log_file = fopen(log_file_path, "w");
-	if (log_file == NULL)
-	{
-		fprintf(stderr, "Unable to open or create specified log file");
-		exit(errno);
-	}
-
-	/* On success: The child process becomes session leader */
-	if (setsid() < 0)
-	{
-		fprintf(log_file, "Error creating new session for process.");
-		exit(errno);
-	}
+	exit(EXIT_SUCCESS);
 }
 
 /**

@@ -4,13 +4,15 @@ all:
 file_server:
 	gcc -std=c99 -m32 file_server.c -o file_server
 test_file_server:
+	rm file_server
 	make file_server
-	./file_server 8585  router_stats.txt
+	./file_server 8585 ./test_dir file_server_stats.txt
 file_client:
-	gcc -std=c99 -m32 file_client.c -o pktgen
+	gcc -std=c99 -m32 file_client.c -o file_client
 test_file_client:
+	rm file_client
 	make file_client
-	./file_client 192.168.10.1 8585 picture.jpg
+	./file_client 127.0.0.1 8585 picture.jpg
 clean:
 	rm file_client file_server server_logs.txt
 package:
