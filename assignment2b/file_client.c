@@ -23,7 +23,7 @@ int main (int argc, char *argv[])
 	char buffer[MAXBUF];
 	FILE* save_file;
 
-	if (argc != 3)
+	if (argc != 4)
 	{
 		fprintf(
 			stderr,
@@ -56,13 +56,11 @@ int main (int argc, char *argv[])
 		exit(errno);
 	}
 
-	if (sendto(
+	if (send(
 			socketfd,
 			file_name,
 			strlen(buffer) + 1,
-			0,
-			(struct sockaddr*) &dest,
-			sizeof(dest)) == -1
+			0) == -1
 	) {
 		fprintf(stderr, "Error sending file request to client.\n");
 		exit(EXIT_FAILURE);
@@ -94,7 +92,7 @@ int main (int argc, char *argv[])
 			}
 			else
 			{
-				fprintf(stderr, "Error when reading incoming file stream.\n");
+				fprintf(stderr, "Error when reading incoming file stream. %d\n", errno);
 				break;
 			}
 		}

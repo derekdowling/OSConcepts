@@ -33,9 +33,8 @@
 #include <unistd.h>
 
 #define CHUNK_SIZE 1024
-#define IP "192.168.10.1"
+#define IP "127.0.0.1"
 
-void daemonize(FILE* log_file, char* log_file_path);
 void log_response(
 	FILE* log_file,
 	char* ip,
@@ -86,22 +85,23 @@ int main(int argc,	char *argv[])
 	/* assuming we've passed all checks, assign port */
 	port = p;
 
-	/* Fork off the parent process and terminate if an error occurred. */
-	pid = fork();
-	if (pid < 0)
-	{
-		fprintf(stderr, "Failed to fork off parent while daemonizing.\n");
-		exit(EXIT_FAILURE);
-	}
+	/* Start deamonization by forking off the parent process and terminating
+	 * if an error occurred. */
+	/* pid = fork(); */
+	/* if (pid < 0) */
+	/* { */
+		/* fprintf(stderr, "Failed to fork off parent while daemonizing.\n"); */
+		/* exit(EXIT_FAILURE); */
+	/* } */
 
-	/* Success: Terminate Parent Process and continue on to post-daemoinzation */
-	if (pid > 0)
-	{
-		exit(EXIT_SUCCESS);
-	}
+	/* [> Success: Terminate Parent Process and continue on to post-daemoinzation <] */
+	/* if (pid > 0) */
+	/* { */
+		/* exit(EXIT_SUCCESS); */
+	/* } */
 
-	/* Set new file permissions */
-	umask(0);
+	/* [> Set new file permissions <] */
+	/* umask(0); */
 
 	/* FROM HERE ON OUT, LOG TO FILE, OTHERWISE WE WONT SEE IT */
 	log_file = fopen(argv[3], "w");
@@ -134,7 +134,7 @@ int main(int argc,	char *argv[])
 	memset(&sockname, 0, sizeof(sockname));
 	sockname.sin_family = AF_INET;
 	sockname.sin_port = htons(port);
-	sockname.sin_addr.s_addr = htonl(INADDR_ANY);
+	sockname.sin_addr.s_addr = inet_addr(IP);
 	sd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
 	if (sd == -1)
@@ -149,9 +149,9 @@ int main(int argc,	char *argv[])
 		exit(errno);
 	}
 
-	if (listen(sd, 3) == -1)
+	if (listen(sd, 5) == -1)
 	{
-		fprintf(log_file, "Failed to listen via socket.\n");
+		fprintf(log_file, "Failed to listen via socket, errno: %d.\n", errno);
 		exit(errno);
 	}
 
