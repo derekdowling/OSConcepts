@@ -170,7 +170,7 @@ int main(int argc,	char *argv[])
 	fprintf(log_file, "Server up and listening for connections on port %u\n", port);
 	while(1)
 	{
-		int clientsd;
+		int clientsd, client_pid;
 		clientlen = sizeof(&client);
 
 		clientsd = accept(sd, (struct sockaddr *)&client, &clientlen);
@@ -188,9 +188,9 @@ int main(int argc,	char *argv[])
 		 * goes wrong.
 		 */
 
-		pid = fork();
-		fprintf(log_file, "%d\n", pid);
-		if(pid == 0)
+		client_pid = fork();
+		fprintf(log_file, "%d\n", client_pid);
+		if(client_pid > 0)
 		{
 			/* log our start time */
 			time_t start_time = time(NULL);
@@ -232,7 +232,6 @@ int main(int argc,	char *argv[])
 						buffer[count] = 0;
 
 						/* try streaming to socket */
-						fprintf(log_file, "Sending length: %u\n", count);
 						w = write(clientsd, buffer, count);
 						
 						if (w > 0)
@@ -253,7 +252,7 @@ int main(int argc,	char *argv[])
 							break;
 						}
 					}
-
+					
 					/*
 					 * If we finished successfully, and we've sent more than a
 					 * single chunk, terminate with "$" chunk.
@@ -262,8 +261,12 @@ int main(int argc,	char *argv[])
 					{
 						if (written > CHUNK_SIZE - 1)
 						{
-							write(clientsd, "$\0", 2);
-					fprintf(log_file, "Finishing");
+							fprintf(log_file, "here we are");
+							if (write(clientsd, "$", 2) == -1)
+							{
+								fprintf(log_file, "Error sending EOF symbol.\n");
+							}
+							write(clientsd, "", 0);
 						}
 
 						time_t finish = time(NULL);
@@ -273,6 +276,7 @@ int main(int argc,	char *argv[])
 						sprintf(result_msg, "transmission not completed");
 					}
 
+					fprintf(log_file, "hrrm");
 					fclose(file);
 				}
 				else
@@ -295,16 +299,19 @@ int main(int argc,	char *argv[])
 			}
 
 			/* done serving request, terminate fork */
+			sleep(2);
+			shutdown(clientsd, SHUT_RDWR);
+			close(clientsd);
+		/* finally, close connection */
+		fprintf(log_file, "donskies\n");
 			exit(0);
 		}
-		else
+		/* if we're dealing with the parent daemon, continue so we don't close anyhting */
+		else if(client_pid == -1)
 		{
 			fprintf(log_file, "Connection fork failed.\n");
 		}
 
-		/* finally, close connection */
-		fprintf(log_file, "donskies\n");
-		close(clientsd);
 	}
 
 	exit(EXIT_SUCCESS);

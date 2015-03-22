@@ -77,7 +77,8 @@ int main (int argc, char *argv[])
 	time_t last_chunk = time(NULL);
 	for(int res ;;)
 	{
-		res = recv(socketfd, buffer, sizeof(buffer), MSG_DONTWAIT);
+		memset(&buffer[0], 0, MAXBUF);
+		res = recv(socketfd, buffer, MAXBUF, MSG_DONTWAIT);
 		if (res == -1)
 		{
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -103,8 +104,9 @@ int main (int argc, char *argv[])
 		else if(res > 0)
 		{
 			/* if we receive exactly '$\0' it's EOF! */
-			if (res == 2 && buffer[0] == '$')
+			if (res == 2)// && buffer[0] == '$')
 			{
+				printf("%s downloaded successfully!\n", file_name);
 				break;
 			}
 
@@ -117,8 +119,6 @@ int main (int argc, char *argv[])
 			last_chunk = time(NULL);
 		}
 	}
-
-	printf("%s downloaded successfully!\n", file_name);
 
 	// now tear everything back down
 	close(socketfd);
