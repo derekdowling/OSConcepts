@@ -37,7 +37,8 @@ int main (int argc, char *argv[])
 	char* file_name = argv[3];
 
 	/* build our socket */
-	socketfd = build_socket(port);
+	/* socketfd = build_socket(port); */
+	socketfd = socket(AF_INET, SOCK_STREAM, 0);
 
 	/* define the target file_server address */
 	dest.sin_family = AF_INET;
@@ -56,17 +57,16 @@ int main (int argc, char *argv[])
 		exit(errno);
 	}
 
-	if (send(
+	if (write(
 			socketfd,
 			file_name,
-			strlen(buffer) + 1,
-			0) == -1
+			strlen(file_name) + 1) == -1
 	) {
 		fprintf(stderr, "Error sending file request to client.\n");
 		exit(EXIT_FAILURE);
 	}
 
-	save_file = fopen(file_name, "w");
+	save_file = fopen(file_name, "wb");
 	if (save_file == NULL)
 	{
 		fprintf(stderr, "Error creating save file,\n");
@@ -92,7 +92,7 @@ int main (int argc, char *argv[])
 			}
 			else
 			{
-				fprintf(stderr, "Error when reading incoming file stream. %d\n", errno);
+				fprintf(stderr, "Connection refused. Errno: %d\n", errno);
 				break;
 			}
 		}
@@ -100,11 +100,17 @@ int main (int argc, char *argv[])
 		{
 			break;
 		}
-		else
+		else if(res > 0)
 		{
-			if (fwrite(buffer, sizeof(char), sizeof(res), save_file) < res)
+			/* if we receive exactly '$\0' it's EOF! */
+			if (res == 2 && buffer[0] == '$')
 			{
-				fprintf(stderr, "Error streaming save buffer to file.\n");
+				break;
+			}
+
+			if (fwrite(buffer, sizeof(char), res, save_file) < res)
+			{
+				fprintf(stderr, "Error streaming save buffer to file. Errno: %d\n", errno);
 				break;
 			}
 
@@ -112,39 +118,10 @@ int main (int argc, char *argv[])
 		}
 	}
 
+	printf("%s downloaded successfully!\n", file_name);
+
 	// now tear everything back down
 	close(socketfd);
 	fclose(save_file);
 	exit(EXIT_SUCCESS);
-}
-
-/**
- * Handles building the socket, binding, and listening it to the specified
- * port.
- */
-int build_socket(int port)
-{
-	struct sockaddr_in sock_addr;
-	int socketfd;
-	
-	if ((socketfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
-	{
-		fprintf(stderr, "Unable to create a new socket.");
-		exit(errno);
-	}
-
-	// Specify socket parameters
-	memset((char *) &sock_addr, 0, sizeof(sock_addr));
-	sock_addr.sin_family = AF_INET;
-	sock_addr.sin_addr.s_addr = INADDR_ANY;
-	sock_addr.sin_port = htons(9999);
-
-	// bind to specified socket
-	if (bind(socketfd, (struct sockaddr *) &sock_addr, sizeof(sock_addr)) == -1)
-	{
-		fprintf(stderr, "Error binding socket on port %d\n", port);
-		exit(errno);
-	}
-
-	return socketfd;
 }

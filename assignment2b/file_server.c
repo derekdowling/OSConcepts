@@ -33,7 +33,7 @@
 #include <unistd.h>
 
 #define CHUNK_SIZE 1024
-#define IP "127.0.0.1"
+/* #define IP "127.0.0.1" */
 
 void log_response(
 	FILE* log_file,
@@ -51,13 +51,11 @@ static void kidhandler(int signum);
 int main(int argc,	char *argv[])
 {
 	struct sockaddr_in sockname, client;
-	char buffer[CHUNK_SIZE], *ep;
+	char buffer[CHUNK_SIZE];
 	struct sigaction sa;
 	socklen_t clientlen;
-	int sd;
-	u_short port;
+	int sd, port;
 	pid_t pid;
-	u_long p;
 	FILE* log_file;
 
 	/* Check arg length */
@@ -67,41 +65,27 @@ int main(int argc,	char *argv[])
 		exit(-1);
 	}
 
-	errno = 0;
-	port = strtoul(argv[1], &ep, 10);
-	if (*argv[1] == '\0' || *ep != '\0')
-	{
-		fprintf(stderr, "%s - not a number\n", argv[1]);
-	}
-	if ((errno == ERANGE) || (port > USHRT_MAX))
-	{
-		/* It's a number, but it either can't fit in an unsigned
-		 * long, or is too big for an unsigned short
-		 */
-		fprintf(stderr, "%s - value out of range\n", argv[1]);
-		exit(-1);
-	}
-
 	/* assuming we've passed all checks, assign port */
-	port = p;
+	port = atoi(argv[1]);
+	puts(argv[3]);
 
 	/* Start deamonization by forking off the parent process and terminating
 	 * if an error occurred. */
-	/* pid = fork(); */
-	/* if (pid < 0) */
-	/* { */
-		/* fprintf(stderr, "Failed to fork off parent while daemonizing.\n"); */
-		/* exit(EXIT_FAILURE); */
-	/* } */
+	pid = fork();
+	if (pid < 0)
+	{
+		fprintf(stderr, "Failed to fork off parent while daemonizing.\n");
+		exit(EXIT_FAILURE);
+	}
 
-	/* [> Success: Terminate Parent Process and continue on to post-daemoinzation <] */
-	/* if (pid > 0) */
-	/* { */
-		/* exit(EXIT_SUCCESS); */
-	/* } */
+	/* Success: Terminate Parent Process and continue on to post-daemoinzation */
+	if (pid > 0)
+	{
+		exit(EXIT_SUCCESS);
+	}
 
-	/* [> Set new file permissions <] */
-	/* umask(0); */
+	/* Set new file permissions */
+	umask(0);
 
 	/* FROM HERE ON OUT, LOG TO FILE, OTHERWISE WE WONT SEE IT */
 	log_file = fopen(argv[3], "w");
@@ -110,6 +94,8 @@ int main(int argc,	char *argv[])
 		fprintf(stderr, "Unable to open or create log file: %s.\n", argv[3]);
 		exit(errno);
 	}
+	/* set log buffer to 0 so we don't need to flush all over the place */
+	setbuf(log_file, NULL);
 
 	/* On success: The child process becomes session leader */
 	if (setsid() < 0)
@@ -134,13 +120,13 @@ int main(int argc,	char *argv[])
 	memset(&sockname, 0, sizeof(sockname));
 	sockname.sin_family = AF_INET;
 	sockname.sin_port = htons(port);
-	sockname.sin_addr.s_addr = inet_addr(IP);
-	sd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	sockname.sin_addr.s_addr = htonl(INADDR_ANY);
+	sd = socket(AF_INET, SOCK_STREAM, 0);
 
 	if (sd == -1)
 	{
 		fprintf(log_file, "Failed setting up socket.\n");
-		exit(errno);
+		err(1, "Failed socket setup");
 	}
 
 	if (bind(sd, (struct sockaddr *) &sockname, sizeof(sockname)) == -1)
@@ -174,7 +160,7 @@ int main(int argc,	char *argv[])
 	sa.sa_flags = SA_RESTART;
 	if (sigaction(SIGCHLD, &sa, NULL) == -1)
 	{
-		fprintf(log_file, "sigaction failed");
+		fprintf(log_file, "Sigaction failed.\n");
 		exit(errno);
 	}
 
@@ -190,7 +176,7 @@ int main(int argc,	char *argv[])
 		clientsd = accept(sd, (struct sockaddr *)&client, &clientlen);
 		if (clientsd == -1)
 		{
-			fprintf(log_file, "Connection accept failed");
+			fprintf(log_file, "Connection accept failed.\n");
 			exit(-1);
 		}
 
@@ -203,6 +189,7 @@ int main(int argc,	char *argv[])
 		 */
 
 		pid = fork();
+		fprintf(log_file, "%d\n", pid);
 		if(pid == 0)
 		{
 			/* log our start time */
@@ -214,15 +201,19 @@ int main(int argc,	char *argv[])
 			int result = 0;
 			char file_name[CHUNK_SIZE], result_msg[32];
 
+			/* This next little bit is for parsing out IP/Port for logging */
 			struct sockaddr_in *sin = (struct sockaddr_in *) &client;
 			char* ip = inet_ntoa(sin->sin_addr);
 			unsigned short port = sin->sin_port;
 
+			fprintf(log_file, "Connected to %s:%u\n", ip, port);
+
 			/* parse incoming request */
-			if (recv(clientsd, file_name, CHUNK_SIZE, 0) > 0)
+			if (read(clientsd, file_name, CHUNK_SIZE) > 0)
 			{
 
-				file = fopen(file_name, "r");
+				fprintf(log_file, "Reauested: %s\n", file_name);
+				file = fopen(file_name, "rb");
 				if (file != NULL)
 				{
 					/*
@@ -241,6 +232,7 @@ int main(int argc,	char *argv[])
 						buffer[count] = 0;
 
 						/* try streaming to socket */
+						fprintf(log_file, "Sending length: %u\n", count);
 						w = write(clientsd, buffer, count);
 						
 						if (w > 0)
@@ -271,6 +263,7 @@ int main(int argc,	char *argv[])
 						if (written > CHUNK_SIZE - 1)
 						{
 							write(clientsd, "$\0", 2);
+					fprintf(log_file, "Finishing");
 						}
 
 						time_t finish = time(NULL);
@@ -281,7 +274,6 @@ int main(int argc,	char *argv[])
 					}
 
 					fclose(file);
-
 				}
 				else
 				{
@@ -299,7 +291,7 @@ int main(int argc,	char *argv[])
 			}
 			else
 			{
-				fprintf(log_file, "Error receiving incoming socket message.");
+				fprintf(log_file, "Error receiving incoming socket message.\n");
 			}
 
 			/* done serving request, terminate fork */
@@ -307,10 +299,11 @@ int main(int argc,	char *argv[])
 		}
 		else
 		{
-			fprintf(log_file, "fork failed");
+			fprintf(log_file, "Connection fork failed.\n");
 		}
 
 		/* finally, close connection */
+		fprintf(log_file, "donskies\n");
 		close(clientsd);
 	}
 
@@ -337,6 +330,8 @@ void log_response(
 		asctime(localtime(&start)),
 		result
 	);
+
+	fflush(log_file);
 }
 
 /**

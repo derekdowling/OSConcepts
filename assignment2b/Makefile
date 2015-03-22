@@ -6,7 +6,7 @@ file_server:
 test_file_server:
 	rm file_server
 	make file_server
-	./file_server 8585 ./test_dir file_server_stats.txt
+	./file_server 8585 ./test_dir server_stats.txt
 file_client:
 	gcc -std=c99 -m32 file_client.c -o file_client
 test_file_client:
