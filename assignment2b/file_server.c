@@ -189,7 +189,6 @@ int main(int argc,	char *argv[])
 		 */
 
 		client_pid = fork();
-		fprintf(log_file, "%d\n", client_pid);
 		if(client_pid > 0)
 		{
 			/* log our start time */
@@ -206,13 +205,9 @@ int main(int argc,	char *argv[])
 			char* ip = inet_ntoa(sin->sin_addr);
 			unsigned short port = sin->sin_port;
 
-			fprintf(log_file, "Connected to %s:%u\n", ip, port);
-
 			/* parse incoming request */
 			if (read(clientsd, file_name, CHUNK_SIZE) > 0)
 			{
-
-				fprintf(log_file, "Reauested: %s\n", file_name);
 				file = fopen(file_name, "rb");
 				if (file != NULL)
 				{
@@ -261,37 +256,48 @@ int main(int argc,	char *argv[])
 					{
 						if (written > CHUNK_SIZE - 1)
 						{
-							fprintf(log_file, "here we are");
-							if (write(clientsd, "$", 2) == -1)
+							if (write(clientsd, "$", 1) == -1)
 							{
 								fprintf(log_file, "Error sending EOF symbol.\n");
 							}
-							write(clientsd, "", 0);
 						}
 
 						time_t finish = time(NULL);
-						sprintf(result_msg, "%s", asctime(localtime(&finish)));
+						log_response(
+							log_file,
+							ip,
+							port,
+							file_name,
+							start_time,
+							asctime(localtime(&finish))
+						);
+
 				
 					} else {
 						sprintf(result_msg, "transmission not completed");
+						log_response(
+							log_file,
+							ip,
+							port,
+							file_name,
+							start_time,
+							"file not found"
+						);
 					}
 
-					fprintf(log_file, "hrrm");
 					fclose(file);
 				}
 				else
 				{
-					sprintf(result_msg, "file not found");
+					log_response(
+						log_file,
+						ip,
+						port,
+						file_name,
+						start_time,
+						"file not found"
+					);
 				}
-
-				log_response(
-					log_file,
-					ip,
-					port,
-					file_name,
-					start_time,
-					result_msg
-				);
 			}
 			else
 			{
@@ -299,11 +305,8 @@ int main(int argc,	char *argv[])
 			}
 
 			/* done serving request, terminate fork */
-			sleep(2);
 			shutdown(clientsd, SHUT_RDWR);
 			close(clientsd);
-		/* finally, close connection */
-		fprintf(log_file, "donskies\n");
 			exit(0);
 		}
 		/* if we're dealing with the parent daemon, continue so we don't close anyhting */
@@ -314,6 +317,7 @@ int main(int argc,	char *argv[])
 
 	}
 
+	fclose(log_file);
 	exit(EXIT_SUCCESS);
 }
 

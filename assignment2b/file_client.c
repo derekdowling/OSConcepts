@@ -103,13 +103,6 @@ int main (int argc, char *argv[])
 		}
 		else if(res > 0)
 		{
-			/* if we receive exactly '$\0' it's EOF! */
-			if (res == 2)// && buffer[0] == '$')
-			{
-				printf("%s downloaded successfully!\n", file_name);
-				break;
-			}
-
 			if (fwrite(buffer, sizeof(char), res, save_file) < res)
 			{
 				fprintf(stderr, "Error streaming save buffer to file. Errno: %d\n", errno);
