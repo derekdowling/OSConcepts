@@ -88,7 +88,7 @@ void simulate()
     while (1)
     {
         /* sleep/increment step */
-        sleep(0);
+        sleep(5);
 
         /* Make sure we're not all sleeping */
         int all_waiting = 1;
@@ -242,12 +242,46 @@ void remove_resources(int process)
 
 void perform_bankers(int process, int previous)
 {
-    /* See if we can fulfill request */
+    /* 1 == do it up, 0 == wait */
     int result = 1;
+
+    /* See if we have enough available resources */
     for (int r = 0; r < resource_count; r++)
     {
-        if (process_requested_allocations[process][r] > available_resources[r]) {
+        int requested = process_requested_allocations[process][r];
+        int available = available_resources[r];
+
+        if (requested > available)
+        {
             result = 0;
+            break;
+        }
+        else
+        {
+            int projected_available = available - requested;
+
+            /* Check that all other running processes would still be in a safe
+             * state */
+            for (int p = 0; p < process_count; p++)
+            {
+                if (process_waiting[p] == 1)
+                {
+                    continue;
+                }
+                else
+                {
+                    int max = max_process_allocations[p][r];
+                    int current_process = process_allocations[p][r];
+
+                    /* Banker's Heuristic if this check fails, cant be
+                     * allocated */
+                    if (max > projected_available + current_process)
+                    {
+                        result = 0;
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -343,11 +377,6 @@ int** get_2d_int(int x, int y)
 /* Generate num between 0 and max additional allowable value */
 int random_int(int max)
 {
-    if (max == 0)
-    {
-        printf("WTF\n");
-        exit(-1);
-    }
     return (rand() % max) + 1;
 }
 
