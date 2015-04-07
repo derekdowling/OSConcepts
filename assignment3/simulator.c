@@ -21,7 +21,7 @@ void free_allocations();
 
 /* Simulation Related Functions */
 void simulate();
-void perform_bankers(int process);
+void perform_bankers(int process, int previous);
 void remove_resources(int process);
 
 /* Pretty Printers */
@@ -30,7 +30,6 @@ void print_table(int** table);
 void print_resource_table(int* table);
 
 /* CONSTANTS */
-int step_multiplier = 5;
 int resource_count, process_count;
 int *available_resources, *max_resources, *available_resources, *process_waiting;
 int **max_process_allocations, **process_allocations, ** process_requested_allocations;
@@ -58,7 +57,6 @@ int main(void)
 
 void simulate()
 {
-    int step = 1;
     process_waiting = malloc(process_count * sizeof(int));
 
     srand(time(NULL));
@@ -83,77 +81,91 @@ void simulate()
     /* CTRL+C Handling */
     signal(SIGINT, signal_handler);
 
-    printf("\n\n**STARTING SIMULATION**\n");
+    printf("\n\n**STARTING SIMULATION**\n\n");
     output_snapshot();
 
     /* Simulate */
     while (1)
     {
-        /* Update on multiples of step */
-        if (step % step_multiplier == 0)
+        /* sleep/increment step */
+        sleep(0);
+
+        /* Make sure we're not all sleeping */
+        int all_waiting = 1;
+        for (int p = 0; p < process_count; p++)
         {
-            for (int p = 0; p < process_count; p++)
+            if (process_waiting[p] == 0)
             {
-                /* Do nothing if process is waiting for resources */
-                if (process_waiting[p] == 1)
-                {
-                    continue;
-                }
-
-                /* Generate a process action between 0-2 */
-                int action = random_int(3);
-
-                /* Keep Executing With Given Resources */
-                if (action == 0)
-                {
-                    continue;
-                }
-
-                /* Ask For More Resources */
-                else if (action == 1)
-                {
-                    /* Generate additional resources to request */
-                    for (int r = 0; r < resource_count; r++)
-                    {
-                        process_requested_allocations[p][r] =
-                            random_int(
-                                max_process_allocations[p][r] -
-                                process_allocations[p][r]
-                            );
-                    }
-
-                    output_snapshot();
-
-                    /* Print Request */
-                    printf("Request (");
-                    for (int r = 0; r < resource_count; r++)
-                    {
-                        int val = process_allocations[p][r];
-                        if (r + 1 < resource_count)
-                        {
-                            printf("%d,", val);
-                        }
-                        else
-                        {
-                            printf("%d) came from P%d\n", val, p);
-                        }
-                    }
-
-                    perform_bankers(p);
-                }
-
-                /* Release Resources */
-                else if(action == 2)
-                {
-                    remove_resources(p);
-                }
+                all_waiting = 0;
             }
         }
 
-        /* sleep/increment step */
-        printf("sleep\n");
-        sleep(1);
-        step++;
+        if (all_waiting == 1)
+        {
+            printf("All processes are in a waiting state, exiting.\n");
+            exit(0);
+        }
+
+        for (int p = 0; p < process_count; p++)
+        {
+            /* Do nothing if process is waiting for resources */
+            if (process_waiting[p] == 1)
+            {
+                continue;
+            }
+
+            /* Generate a process action between 0-2 */
+            int action = random_int(2);
+
+            /* Keep Executing With Given Resources */
+            if (action == 0)
+            {
+                continue;
+            }
+
+            /* Ask For More Resources */
+            else if (action == 1)
+            {
+                output_snapshot();
+
+                /* Generate additional resources to request */
+                for (int r = 0; r < resource_count; r++)
+                {
+                    int max = max_process_allocations[p][r] - process_allocations[p][r];
+                    int val = 0;
+                    if (max > 0)
+                    {
+                        val = random_int(max);
+                    }
+                    process_requested_allocations[p][r] = val;
+                }
+
+                /* Print Request */
+                printf("Request (");
+                for (int r = 0; r < resource_count; r++)
+                {
+                    int val = process_requested_allocations[p][r];
+                    if (r + 1 < resource_count)
+                    {
+                        printf("%d,", val);
+                    }
+                    else
+                    {
+                        printf("%d) came from P%d\n\n", val, p + 1);
+                    }
+                }
+
+                perform_bankers(p, 0);
+                output_snapshot();
+            }
+
+            /* Release Resources */
+            else if(action == 2)
+            {
+                remove_resources(p);
+                output_snapshot();
+            }
+        }
     }
 }
 
@@ -167,9 +179,14 @@ void remove_resources(int process)
     }
 
     /* Now start removing resources from process */
-    int released[resource_count];
+    int* released = malloc(resource_count * sizeof(int));
     for (int r = 0; r < resource_count; r++)
     {
+        if (count < 2)
+        {
+            break;
+        }
+
         int max = process_allocations[process][r];
         int remove = 0;
 
@@ -177,21 +194,25 @@ void remove_resources(int process)
         {
             remove = random_int(max - 1);
         }
-        else
+        else if (max > 0)
         {
             remove = random_int(max);
         }
 
         /* Deallocated first */
-        process_allocations[process][r] = remove;
+        process_allocations[process][r] = process_allocations[process][r] - remove;
 
         /* Put Resources Back In Pool */
         available_resources[r] =
             available_resources[r] + remove;
+
+        released[r] = remove;
+
+        count -= remove;
     }
 
     /* Print Released */
-    printf("P%d has released (", process);
+    printf("P%d has released (", process + 1);
     for (int r = 0; r < resource_count; r++)
     {
         int val = released[r];
@@ -201,9 +222,11 @@ void remove_resources(int process)
         }
         else
         {
-            printf("%d) resources\n", val);
+            printf("%d) resources\n\n", val);
         }
     }
+
+    free(released);
 
 
     /* Perform Bankers */
@@ -212,18 +235,18 @@ void remove_resources(int process)
         /* Only check waiting processes */
         if (process_waiting[pro] == 1)
         {
-            perform_bankers(pro);
+            perform_bankers(pro, 1);
         }
     }
 }
 
-void perform_bankers(int process)
+void perform_bankers(int process, int previous)
 {
     /* See if we can fulfill request */
     int result = 1;
     for (int r = 0; r < resource_count; r++)
     {
-        if (process_requested_allocations[process][r] < available_resources[r]) {
+        if (process_requested_allocations[process][r] > available_resources[r]) {
             result = 0;
         }
     }
@@ -236,7 +259,7 @@ void perform_bankers(int process)
         printf("Request (");
         for (int r = 0; r < resource_count; r++)
         {
-            int val = process_allocations[process][r];
+            int val = process_requested_allocations[process][r];
             if (r + 1 < resource_count)
             {
                 printf("%d,", val);
@@ -244,10 +267,10 @@ void perform_bankers(int process)
             else
             {
                 printf(
-                    "%d) from P%d cannot be satisfied, P%d is in waiting state\n",
+                    "%d) from P%d cannot be satisfied, P%d is in waiting state\n\n",
                     val,
-                    process,
-                    process
+                    process + 1,
+                    process + 1
                 );
             }
         }
@@ -255,6 +278,38 @@ void perform_bankers(int process)
     /* Otherwise, allocate */
     else
     {
+        process_waiting[process] = 0;
+
+        /* Print Request */
+        if (previous == 0)
+        {
+            printf("Request (");
+        }
+        else
+        {
+            printf("Previous request of (");
+        }
+        for (int r = 0; r < resource_count; r++)
+        {
+            int val = process_requested_allocations[process][r];
+            if (r + 1 < resource_count)
+            {
+                printf("%d,", val);
+            }
+            else
+            {
+                if (previous == 0)
+                {
+                    printf("%d) from P%d has been granted\n\n", val, process + 1);
+                }
+                else
+                {
+                    printf("%d) from P%d has been satisfied\n\n", val, process + 1);
+                }
+            }
+        }
+
+        /* Updated counters */
         for (int r = 0; r < resource_count; r++)
         {
             /* Remove From Available */
@@ -269,21 +324,6 @@ void perform_bankers(int process)
 
             /* Fulfil request */
             process_requested_allocations[process][r] = 0;
-        }
-
-        /* Print Request */
-        printf("Previous request of (");
-        for (int r = 0; r < resource_count; r++)
-        {
-            int val = process_allocations[process][r];
-            if (r + 1 < resource_count)
-            {
-                printf("%d,", val);
-            }
-            else
-            {
-                printf("%d) from P%d has been granted\n", val, process);
-            }
         }
     }
 }
@@ -303,7 +343,12 @@ int** get_2d_int(int x, int y)
 /* Generate num between 0 and max additional allowable value */
 int random_int(int max)
 {
-    return rand() % (max + 1);
+    if (max == 0)
+    {
+        printf("WTF\n");
+        exit(-1);
+    }
+    return (rand() % max) + 1;
 }
 
 void output_snapshot()
@@ -342,7 +387,7 @@ void print_table(int** table)
     }
 }
 
-void print_resource_table(int table[])
+void print_resource_table(int* table)
 {
     /* Print Colums */
     for (int x = 0; x < resource_count; x++)
@@ -385,7 +430,7 @@ void get_max_process_allocations()
         int i = 0;
 
         /* get input */
-        printf("\nDetails of P%d (%d Resources): ", p, resource_count);
+        printf("\nDetails of P%d (%d Resources): ", p + 1, resource_count);
         fflush(stdout);
         fgets(input, 64, stdin);
 
